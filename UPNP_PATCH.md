@@ -24,9 +24,8 @@
 
 1. clone 上游 release tag
 2. 应用 `patches/upnp-portmapper.patch`
-3. 推送 `upnp/<upstream-tag>` 分支和 `upnp-<upstream-tag>` tag 到这个 fork
-4. 编译 Windows amd64 的 `tailscale.exe` 和 `tailscaled.exe`
-5. 打包 `install.ps1`、`restore.ps1`、`verify.ps1`、README 和补丁文件
-6. 创建 GitHub Release，并上传 zip 与 sha256 文件
+3. 编译 Windows amd64 的 `tailscale.exe` 和 `tailscaled.exe`
+4. 打包 `install.ps1`、`restore.ps1`、`verify.ps1`、README 和补丁文件
+5. 创建 `upnp-<upstream-tag>` GitHub Release，并上传 zip 与 sha256 文件
 
 也可以在 GitHub Actions 页面手动运行 `UPnP patched Windows release`，指定上游 tag，例如 `v1.96.4`。

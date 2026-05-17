@@ -79,7 +79,6 @@ jobs:
           }
           $upstreamRef = $upstreamRef.Trim()
           $patchedTag = "upnp-$upstreamRef"
-          $patchedBranch = "upnp/$upstreamRef"
           $force = $env:INPUT_FORCE -eq "true"
 
           gh release view $patchedTag --repo $env:GITHUB_REPOSITORY *> $null
@@ -101,27 +100,9 @@ jobs:
           }
           $upstreamShortSha = $upstreamSha.Substring(0, [Math]::Min(9, $upstreamSha.Length))
 
-          New-Item -ItemType Directory -Path (Join-Path $srcDir "patches") -Force | Out-Null
-          New-Item -ItemType Directory -Path (Join-Path $srcDir "scripts\windows-upnp-package") -Force | Out-Null
-          New-Item -ItemType Directory -Path (Join-Path $srcDir ".github\workflows") -Force | Out-Null
-          Copy-Item -LiteralPath (Join-Path $forkDir "patches\upnp-portmapper.patch") -Destination (Join-Path $srcDir "patches\upnp-portmapper.patch") -Force
-          Copy-Item -LiteralPath (Join-Path $forkDir "UPNP_PATCH.md") -Destination (Join-Path $srcDir "UPNP_PATCH.md") -Force
-          Copy-Item -LiteralPath (Join-Path $forkDir ".github\workflows\upnp-patched-release.yml") -Destination (Join-Path $srcDir ".github\workflows\upnp-patched-release.yml") -Force
-          Copy-Item -Path (Join-Path $forkDir "scripts\windows-upnp-package\*") -Destination (Join-Path $srcDir "scripts\windows-upnp-package") -Recurse -Force
-
-          Run-Git -C $srcDir config user.name "github-actions[bot]"
-          Run-Git -C $srcDir config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          Run-Git -C $srcDir checkout -B $patchedBranch
-          Run-Git -C $srcDir add net/portmapper/portmapper.go net/portmapper/upnp.go patches/upnp-portmapper.patch scripts/windows-upnp-package UPNP_PATCH.md .github/workflows/upnp-patched-release.yml
-          Run-Git -C $srcDir commit -m "upnp: apply portmapper patch for $upstreamRef"
-          Run-Git -C $srcDir tag -f $patchedTag
-          Run-Git -C $srcDir remote set-url origin "https://x-access-token:$env:GITHUB_TOKEN@github.com/$env:GITHUB_REPOSITORY.git"
-          Run-Git -C $srcDir push origin "HEAD:refs/heads/$patchedBranch" --force
-          Run-Git -C $srcDir push origin "refs/tags/$patchedTag" --force
-
           New-Item -ItemType Directory -Path (Join-Path $packageDir "bin") -Force | Out-Null
-          Copy-Item -Path (Join-Path $srcDir "scripts\windows-upnp-package\*") -Destination $packageDir -Recurse -Force
-          Copy-Item -LiteralPath (Join-Path $srcDir "patches\upnp-portmapper.patch") -Destination (Join-Path $packageDir "portmapper.patch") -Force
+          Copy-Item -Path (Join-Path $forkDir "scripts\windows-upnp-package\*") -Destination $packageDir -Recurse -Force
+          Copy-Item -LiteralPath (Join-Path $forkDir "patches\upnp-portmapper.patch") -Destination (Join-Path $packageDir "portmapper.patch") -Force
           Copy-Item -LiteralPath (Join-Path $srcDir "LICENSE") -Destination (Join-Path $packageDir "LICENSE") -Force
 
           $version = $upstreamRef.TrimStart("v")
@@ -170,4 +151,4 @@ jobs:
           )
           $notes -join "`n" | Set-Content -LiteralPath $notesPath
 
-          Run-Gh release create $patchedTag $zipPath $shaPath --repo $env:GITHUB_REPOSITORY --verify-tag --title "Tailscale $upstreamRef UPnP patched Windows build" --notes-file $notesPath
+          Run-Gh release create $patchedTag $zipPath $shaPath --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --title "Tailscale $upstreamRef UPnP patched Windows build" --notes-file $notesPath
