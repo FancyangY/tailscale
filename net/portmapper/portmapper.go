@@ -100,8 +100,10 @@ func (k *DebugKnobs) disableAll() bool {
 // services (UPnP, NAT-PMP, PCP) to respond before we give up and
 // decide that they're not there. Since these services are on the
 // same LAN as this machine and a single L3 hop away, we don't
-// give them much time to respond.
-const portMapServiceTimeout = 250 * time.Millisecond
+// give them much time to respond. Some consumer gateways, including the
+// Huawei ATP IGD observed in this fork's UPnP patch, reply to SSDP slightly
+// after the former 250ms deadline.
+const portMapServiceTimeout = 1000 * time.Millisecond
 
 // trustServiceStillAvailableDuration is how often we re-verify a port
 // mapping service is available.
@@ -888,13 +890,17 @@ func (c *Client) Probe(ctx context.Context) (res portmappertype.ProbeResult, err
 		}
 	}()
 
-	uc, err := c.listenPacket(context.Background(), "udp4", ":0")
+	uc, err := c.listenPacket(context.Background(), "udp4", net.JoinHostPort(myIP.String(), "0"))
+	if err != nil {
+		c.vlogf("Probe: failed to bind discovery socket to %v: %v; falling back to wildcard", myIP, err)
+		uc, err = c.listenPacket(context.Background(), "udp4", ":0")
+	}
 	if err != nil {
 		c.logf("ProbePCP: %v", err)
 		return res, err
 	}
 	defer uc.Close()
-	ctx, cancel := context.WithTimeout(ctx, 250*time.Millisecond)
+	ctx, cancel := context.WithTimeout(ctx, portMapServiceTimeout)
 	defer cancel()
 	defer closeCloserOnContextDone(ctx, uc)()
 

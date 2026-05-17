@@ -491,6 +491,19 @@ func (c *Client) getUPnPPortMapping(
 	ctx = upnpHTTPClientKey.WithValue(ctx, c.upnpHTTPClientLocked())
 	c.mu.Unlock()
 
+	// The main magicsock path can ask for a mapping before netcheck has
+	// populated UPnP discovery metadata. Probe here so UPnP mapping can be
+	// created without relying on a prior netcheck run.
+	if oldMapping == nil && len(metas) == 0 {
+		if res, err := c.Probe(ctx); err != nil {
+			c.vlogf("UPnP discovery before mapping failed: %v", err)
+		} else if res.UPnP {
+			c.mu.Lock()
+			metas = c.uPnPMetas
+			c.mu.Unlock()
+		}
+	}
+
 	// Wrapper for a uPnPDiscoResponse with an optional existing root
 	// device + URL (if we've got a previous cached mapping).
 	type step struct {

@@ -1,2 +1,3 @@
 go.mod filter=go-mod
 *.go  diff=golang
+*.patch whitespace=-blank-at-eol,-space-before-tab

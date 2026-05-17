@@ -1,0 +1,173 @@
+name: UPnP patched Windows release
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/upnp-patched-release.yml"
+      - "patches/upnp-portmapper.patch"
+      - "scripts/windows-upnp-package/**"
+      - "UPNP_PATCH.md"
+  workflow_dispatch:
+    inputs:
+      upstream_ref:
+        description: "Upstream tailscale/tailscale tag or ref. Empty means latest release."
+        required: false
+        type: string
+      force:
+        description: "Rebuild even if the patched GitHub Release already exists."
+        required: false
+        type: boolean
+        default: false
+  schedule:
+    - cron: "37 3 * * *"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: upnp-patched-release-${{ github.event.inputs.upstream_ref || 'latest' }}-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build patched Windows package
+    runs-on: windows-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GITHUB_TOKEN: ${{ github.token }}
+      INPUT_UPSTREAM_REF: ${{ github.event.inputs.upstream_ref }}
+      INPUT_FORCE: ${{ github.event.inputs.force }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          path: fork
+
+      - name: Build and publish patched release
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          function Run-Git {
+            git @args
+            if ($LASTEXITCODE -ne 0) {
+              throw "git $args failed with exit code $LASTEXITCODE"
+            }
+          }
+
+          function Run-Gh {
+            gh @args
+            if ($LASTEXITCODE -ne 0) {
+              throw "gh $args failed with exit code $LASTEXITCODE"
+            }
+          }
+
+          $workspace = $env:GITHUB_WORKSPACE
+          $forkDir = Join-Path $workspace "fork"
+          $srcDir = Join-Path $workspace "src"
+          $packageDir = Join-Path $workspace "package"
+          $artifactsDir = Join-Path $workspace "artifacts"
+          New-Item -ItemType Directory -Path $artifactsDir -Force | Out-Null
+
+          $upstreamRef = $env:INPUT_UPSTREAM_REF
+          if ([string]::IsNullOrWhiteSpace($upstreamRef)) {
+            $upstreamRef = gh api repos/tailscale/tailscale/releases/latest --jq .tag_name
+            if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($upstreamRef)) {
+              throw "Failed to resolve latest upstream release"
+            }
+          }
+          $upstreamRef = $upstreamRef.Trim()
+          $patchedTag = "upnp-$upstreamRef"
+          $patchedBranch = "upnp/$upstreamRef"
+          $force = $env:INPUT_FORCE -eq "true"
+
+          gh release view $patchedTag --repo $env:GITHUB_REPOSITORY *> $null
+          $releaseExists = $LASTEXITCODE -eq 0
+          if ($releaseExists -and -not $force) {
+            Write-Host "Release $patchedTag already exists; nothing to do."
+            exit 0
+          }
+          if ($releaseExists -and $force) {
+            Run-Gh release delete $patchedTag --repo $env:GITHUB_REPOSITORY --yes --cleanup-tag
+          }
+
+          Run-Git clone --depth 1 --branch $upstreamRef https://github.com/tailscale/tailscale.git $srcDir
+          Run-Git -C $srcDir apply (Join-Path $forkDir "patches\upnp-portmapper.patch")
+
+          $upstreamSha = (git -C $srcDir rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0) {
+            throw "Failed to resolve upstream SHA"
+          }
+          $upstreamShortSha = $upstreamSha.Substring(0, [Math]::Min(9, $upstreamSha.Length))
+
+          New-Item -ItemType Directory -Path (Join-Path $srcDir "patches") -Force | Out-Null
+          New-Item -ItemType Directory -Path (Join-Path $srcDir "scripts\windows-upnp-package") -Force | Out-Null
+          New-Item -ItemType Directory -Path (Join-Path $srcDir ".github\workflows") -Force | Out-Null
+          Copy-Item -LiteralPath (Join-Path $forkDir "patches\upnp-portmapper.patch") -Destination (Join-Path $srcDir "patches\upnp-portmapper.patch") -Force
+          Copy-Item -LiteralPath (Join-Path $forkDir "UPNP_PATCH.md") -Destination (Join-Path $srcDir "UPNP_PATCH.md") -Force
+          Copy-Item -LiteralPath (Join-Path $forkDir ".github\workflows\upnp-patched-release.yml") -Destination (Join-Path $srcDir ".github\workflows\upnp-patched-release.yml") -Force
+          Copy-Item -Path (Join-Path $forkDir "scripts\windows-upnp-package\*") -Destination (Join-Path $srcDir "scripts\windows-upnp-package") -Recurse -Force
+
+          Run-Git -C $srcDir config user.name "github-actions[bot]"
+          Run-Git -C $srcDir config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          Run-Git -C $srcDir checkout -B $patchedBranch
+          Run-Git -C $srcDir add net/portmapper/portmapper.go net/portmapper/upnp.go patches/upnp-portmapper.patch scripts/windows-upnp-package UPNP_PATCH.md .github/workflows/upnp-patched-release.yml
+          Run-Git -C $srcDir commit -m "upnp: apply portmapper patch for $upstreamRef"
+          Run-Git -C $srcDir tag -f $patchedTag
+          Run-Git -C $srcDir remote set-url origin "https://x-access-token:$env:GITHUB_TOKEN@github.com/$env:GITHUB_REPOSITORY.git"
+          Run-Git -C $srcDir push origin "HEAD:refs/heads/$patchedBranch" --force
+          Run-Git -C $srcDir push origin "refs/tags/$patchedTag" --force
+
+          New-Item -ItemType Directory -Path (Join-Path $packageDir "bin") -Force | Out-Null
+          Copy-Item -Path (Join-Path $srcDir "scripts\windows-upnp-package\*") -Destination $packageDir -Recurse -Force
+          Copy-Item -LiteralPath (Join-Path $srcDir "patches\upnp-portmapper.patch") -Destination (Join-Path $packageDir "portmapper.patch") -Force
+          Copy-Item -LiteralPath (Join-Path $srcDir "LICENSE") -Destination (Join-Path $packageDir "LICENSE") -Force
+
+          $version = $upstreamRef.TrimStart("v")
+          $shortStamp = "$version-upnp"
+          $longStamp = "$version-upnp.$env:GITHUB_RUN_NUMBER-t$upstreamShortSha"
+          $ldflags = "-X tailscale.com/version.longStamp=$longStamp -X tailscale.com/version.shortStamp=$shortStamp"
+          $env:CGO_ENABLED = "0"
+          $env:GOTOOLCHAIN = "auto"
+
+          Push-Location $srcDir
+          try {
+            go version
+            go build -trimpath -ldflags $ldflags -o (Join-Path $packageDir "bin\tailscale.exe") ./cmd/tailscale
+            go build -trimpath -ldflags $ldflags -o (Join-Path $packageDir "bin\tailscaled.exe") ./cmd/tailscaled
+          } finally {
+            Pop-Location
+          }
+
+          $zipName = "tailscale-$upstreamRef-upnp-windows-amd64.zip"
+          $zipPath = Join-Path $artifactsDir $zipName
+          Compress-Archive -Path (Join-Path $packageDir "*") -DestinationPath $zipPath -Force
+          $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $zipPath).Hash
+          $shaPath = "$zipPath.sha256"
+          "$hash  $zipName" | Set-Content -LiteralPath $shaPath -NoNewline
+
+          $notesPath = Join-Path $artifactsDir "release-notes.md"
+          $notes = @(
+            "Patched Windows amd64 Tailscale build based on upstream ``$upstreamRef``.",
+            "",
+            "Changes:",
+            "- Portmapper discovery timeout is ``1000ms`` instead of ``250ms``.",
+            "- Portmapper probe UDP socket prefers the detected LAN IP, falling back to ``0.0.0.0`` if that bind fails.",
+            "- UPnP mapping creation triggers discovery if no previous netcheck populated UPnP metadata.",
+            "",
+            "Install:",
+            "1. Download and unzip ``$zipName``.",
+            "2. Open PowerShell as Administrator.",
+            "3. Run ``Set-ExecutionPolicy -Scope Process Bypass -Force``.",
+            "4. Run ``.\install.ps1``.",
+            "",
+            "SHA256:",
+            "",
+            "``````text",
+            "$hash  $zipName",
+            "``````"
+          )
+          $notes -join "`n" | Set-Content -LiteralPath $notesPath
+
+          Run-Gh release create $patchedTag $zipPath $shaPath --repo $env:GITHUB_REPOSITORY --verify-tag --title "Tailscale $upstreamRef UPnP patched Windows build" --notes-file $notesPath
